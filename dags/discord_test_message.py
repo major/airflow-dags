@@ -1,4 +1,5 @@
-"""Send a one-off test message to a Discord channel via an incoming webhook.
+"""
+Send a one-off test message to a Discord channel via an incoming webhook.
 
 The webhook URL is never hardcoded here. It's read from an Airflow
 connection (default: `discord_webhook`; see README) whose password holds
@@ -15,6 +16,7 @@ from __future__ import annotations
 import datetime
 
 import requests
+
 from airflow.sdk import DAG, BaseHook, Param, get_current_context, task
 
 DEFAULT_CONN_ID = "discord_webhook"
@@ -22,12 +24,13 @@ DEFAULT_CONN_ID = "discord_webhook"
 
 @task
 def send_test_message() -> None:
+    """Post a one-off test message to the configured Discord webhook."""
     conn_id = get_current_context()["params"]["conn_id"]
     webhook_url = BaseHook.get_connection(conn_id).password
     if not webhook_url:
+        msg = f"Connection '{conn_id}' has no password set; store the Discord webhook URL there."
         raise ValueError(
-            f"Connection '{conn_id}' has no password set; "
-            "store the Discord webhook URL there."
+            msg,
         )
 
     response = requests.post(

@@ -1,0 +1,139 @@
+# Tooling config for the airflow-dags DAG bundle.
+#
+# This file exists only to configure ruff and pyright; the project itself
+# has no build, package, or runtime — Airflow's GitDagBundle clones this
+# repo and loads dags/*.py directly. See AGENTS.md for the deployment model.
+
+[project]
+name = "airflow-dags"
+version = "0.0.0"
+description = "DAG bundle for the homehosted Apache Airflow deployment"
+requires-python = ">=3.11"
+
+# ---------------------------------------------------------------------------
+# ruff: linter + formatter (https://docs.astral.sh/ruff/)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint]
+# Enumerate every ruleset available in ruff 0.15.22 explicitly, instead of
+# `select = ["ALL"]`. New rulesets added in future ruff releases will not be
+# picked up automatically — to adopt one, add its code here on purpose.
+# Codes verified against `ruff linter` on the pinned version.
+# Excluded by design: CPY (copyright, requires preview) and DOC (pydoclint,
+# requires preview) — preview rules are unstable and not what we want frozen.
+# Docs: https://docs.astral.sh/ruff/rules/
+select = [
+    "A",     # flake8-builtins
+    "AIR",   # Airflow
+    "ANN",   # flake8-annotations
+    "ARG",   # flake8-unused-arguments
+    "ASYNC", # flake8-async
+    "B",     # flake8-bugbear
+    "BLE",   # flake8-blind-except
+    "C4",    # flake8-comprehensions
+    "C90",   # mccabe
+    "COM",   # flake8-commas
+    "D",     # pydocstyle
+    "DJ",    # flake8-django
+    "DTZ",   # flake8-datetimez
+    "E",     # pycodestyle errors
+    "EM",    # flake8-errmsg
+    "ERA",   # eradicate (commented-out code)
+    "EXE",   # flake8-executable
+    "F",     # pyflakes
+    "FA",    # flake8-future-annotations
+    "FAST",  # FastAPI
+    "FBT",   # flake8-boolean-trap
+    "FIX",   # flake8-fixme
+    "FLY",   # flynt
+    "FURB",  # refurb
+    "G",     # flake8-logging-format
+    "I",     # isort
+    "ICN",   # flake8-import-conventions
+    "INP",   # flake8-no-pep420
+    "INT",   # flake8-gettext
+    "ISC",   # flake8-implicit-str-concat
+    "LOG",   # flake8-logging
+    "N",     # pep8-naming
+    "NPY",   # NumPy-specific
+    "PD",    # pandas-vet
+    "PERF",  # perflint
+    "PGH",   # pygrep-hooks
+    "PIE",   # flake8-pie
+    "PL",    # Pylint (umbrella: PLC/PLE/PLR/PLW)
+    "PT",    # flake8-pytest-style
+    "PTH",   # flake8-use-pathlib
+    "PYI",   # flake8-pyi
+    "Q",     # flake8-quotes
+    "RET",   # flake8-return
+    "RSE",   # flake8-raise
+    "RUF",   # Ruff-specific
+    "S",     # flake8-bandit
+    "SIM",   # flake8-simplify
+    "SLF",   # flake8-self
+    "SLOT",  # flake8-slots
+    "T10",   # flake8-debugger
+    "T20",   # flake8-print
+    "TC",    # flake8-type-checking
+    "TD",    # flake8-todos
+    "TID",   # flake8-tidy-imports
+    "TRY",   # tryceratops
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+    "YTT",   # flake8-2020
+]
+
+# Pydocstyle pairs that conflict with each other; pick one of each.
+# D203 (incorrect blank line before class) vs D211 (no blank line before class).
+# D212 (multi-line summary first line) vs D213 (multi-line summary second line).
+# D211 + D213 are the Google-style defaults.
+ignore = [
+    "D203", # pydocstyle: use D211 instead
+    "D212", # pydocstyle: use D213 instead
+    "COM812", # conflicts with the formatter (formatter adds trailing commas)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["airflow"]
+
+[tool.ruff.lint.per-file-ignores]
+# Airflow-specific conventions that don't apply to DAG bundle code:
+# - INP001: dags/ is an implicit namespace package by design — Airflow's
+#   GitDagBundle loads files directly without an __init__.py.
+# - DTZ001: DAG `start_date` is conventionally a naive datetime in Airflow.
+# - BLE001: catching `Exception` is intentional here for best-effort
+#   resilience (per-alert parse failures, per-webhook Discord failures).
+#   Python 3 does not let Exception swallow BaseException, so this is safe.
+"dags/*" = ["INP001", "DTZ001", "BLE001"]
+
+# ---------------------------------------------------------------------------
+# pyright: static type checker (https://microsoft.github.io/pyright/)
+# ---------------------------------------------------------------------------
+[tool.pyright]
+include = ["dags"]
+exclude = [
+    "**/__pycache__",
+    ".venv",
+    "build",
+    "dist",
+    ".ruff_cache",
+    ".pytest_cache",
+]
+pythonVersion = "3.11"
+# "basic" is the recommended default; it catches real bugs without the noise
+# of strict mode on a small DAG bundle.
+typeCheckingMode = "basic"
+# Airflow SDK and provider packages are not installed in this repo's dev env
+# (this is a GitDagBundle, not a packaged project). Don't fail the check on
+# missing imports; type-check what we can resolve.
+reportMissingImports = "none"
+reportMissingTypeStubs = false

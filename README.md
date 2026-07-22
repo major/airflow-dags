@@ -43,3 +43,31 @@ JSON shape. Commit and push; Flux reconciles the secret and the Helm
 release automatically. Trigger `discord_test_message` with
 `conn_id=discord_webhook_alerts` to use it, or reuse the same connection id
 convention in a new DAG.
+
+### stockcharts_discord_alerts
+
+The `stockcharts_discord_alerts` DAG polls StockCharts for new alerts every
+5 minutes (Monday–Friday) and sends them to Discord. It requires two pieces
+of configuration:
+
+1. **Connection**: `AIRFLOW_CONN_STOCKCHARTS_DISCORD_WEBHOOK` (env key in
+   `airflow-connections` secret, same JSON shape as `discord_webhook`). The
+   password field may contain multiple comma-separated webhook URLs; the DAG
+   posts to each one, best-effort, logging and continuing past per-webhook
+   failures.
+
+2. **Variable**: `stockcharts_last_successful_run` (Airflow Variable, created
+   and managed automatically by the DAG itself). This tracks the timestamp of
+   the last successful poll, so the DAG only sends new alerts. If missing, the
+   DAG defaults to the last 5 minutes. No manual setup is required, but you
+   may see it in the Airflow UI's Variables list.
+
+To set up the connection in the homehosted repo:
+
+```bash
+sops apps/airflow/connections-secrets.sops.yaml
+```
+
+Add a new key `AIRFLOW_CONN_STOCKCHARTS_DISCORD_WEBHOOK` with value
+`{"conn_type": "http", "password": "<webhook url>"}` (or multiple URLs
+comma-separated). Commit and push; Flux reconciles the secret automatically.

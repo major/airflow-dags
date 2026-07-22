@@ -1,16 +1,52 @@
 # airflow-dags
 
 DAG bundle for a homehosted Apache Airflow deployment. Airflow's `GitDagBundle`
-clones this repo directly and loads DAGs from `dags/` — there is no build,
-package manifest, test suite, lint config, or CI in this repo.
+clones this repo directly and loads DAGs from `dags/`. There is no build,
+test suite, or CI in this repo; a small lint/format/type-check toolchain
+(ruff + pyright) runs locally via pre-commit.
 
 ## Deployment model
 
 - Push to `main` — Airflow's DAG processor picks up changes on its next
   refresh automatically. No deploy step, no PR merge gate, no packaging.
-- There is nothing to run locally to "test" a DAG; correctness comes from
-  writing valid Airflow code and reviewing it by eye (no local Airflow
-  install/lint/test tooling is set up in this repo).
+- There is no local Airflow install — DAGs cannot be run locally. Correctness
+  comes from writing valid Airflow code, reviewed by eye and gated by
+  pre-commit (ruff + pyright).
+
+## Local checks (pre-commit)
+
+Every commit runs hooks defined in `.pre-commit-config.yaml`:
+
+- `pre-commit-hooks` — trailing whitespace, EOF newline, YAML/TOML syntax,
+  large-file guard, mixed line endings, etc.
+- `ruff` (lint with `--fix`, then `ruff format`) — config in
+  `pyproject.toml` under `[tool.ruff]`.
+- `pyright` — config in `pyproject.toml` under `[tool.pyright]`, set to
+  `typeCheckingMode = "basic"`.
+
+One-time setup (host must have `pre-commit` available — e.g.
+`pip install pre-commit` or `pipx install pre-commit`):
+
+    pre-commit install
+
+Run on demand without committing:
+
+    pre-commit run --all-files
+
+Run a single tool directly for faster iteration:
+
+    ruff check --fix dags/
+    ruff format dags/
+    pyright dags/
+
+### Why pyright doesn't fail on missing `airflow` imports
+
+The pyright config sets `reportMissingImports = "none"` because the Airflow
+SDK and provider packages are not installed in this repo's dev env — this
+is a GitDagBundle, not a packaged project, and there is intentionally no
+runtime install. Type checks run on what is resolvable (`requests`,
+stdlib, etc.); the `airflow` types are left to be validated at runtime by
+Airflow itself.
 
 ## Code conventions (from existing DAGs)
 
