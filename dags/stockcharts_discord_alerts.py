@@ -67,32 +67,32 @@ def parse_stockcharts_time(value: str) -> datetime.datetime:
     raise ValueError(msg)
 
 
-@task(retries=2, retry_delay=datetime.timedelta(seconds=30))
-def detect_changes() -> list[dict[str, Any]]:  # noqa: C901, PLR0912, PLR0915 - complex by design; refactor candidate
+def _load_anchor(now: datetime.datetime) -> datetime.datetime:
     """
-    Fetch StockCharts alerts and filter for new ones since the last run.
+    Read the state anchor from an Airflow Variable.
 
-    Returns a list of new alert dicts with keys: alert, bearish, lastfired, symbol.
+    Returns the stored timestamp if valid, otherwise ``now - 5 minutes``.
     """
-    # Capture the current time at the start of this task run (for anchor update).
-    now = datetime.datetime.now(STOCKCHARTS_TZ)
-
-    # Read the state anchor from Airflow Variable.
     try:
         anchor_str = Variable.get(VARIABLE_NAME)
         anchor = datetime.datetime.fromisoformat(anchor_str)
-        # Ensure anchor is timezone-aware (in case it was stored without tz info).
         if anchor.tzinfo is None:
             anchor = anchor.replace(tzinfo=STOCKCHARTS_TZ)
     except Exception:
-        # If the variable doesn't exist or is malformed, default to now - 5 minutes.
         anchor = now - datetime.timedelta(minutes=5)
         logger.info(
             "Variable %s not found or invalid; defaulting anchor to now - 5 minutes",
             VARIABLE_NAME,
         )
+    return anchor
 
-    # Fetch alerts from StockCharts.
+
+def _fetch_alerts() -> list[dict[str, Any]]:
+    """
+    Fetch raw alerts from StockCharts.
+
+    Returns the parsed JSON payload. Re-raises on any failure after logging.
+    """
     try:
         response = requests.get(
             STOCKCHARTS_URL,
@@ -105,74 +105,142 @@ def detect_changes() -> list[dict[str, Any]]:  # noqa: C901, PLR0912, PLR0915 - 
             timeout=10,
         )
         response.raise_for_status()
-        raw_alerts = response.json()
+        return response.json()
     except Exception:
         logger.exception("Failed to fetch StockCharts alerts")
         raise
 
-    # Parse and filter alerts.
-    parsed_alerts = []
-    for raw_alert in raw_alerts:
+
+def _clean_alert_text(raw: object) -> str:
+    """Clean the *alert* field: strip if str, else ``""``."""
+    return raw.strip() if isinstance(raw, str) else ""
+
+
+def _clean_alert_bearish(raw: object) -> str:
+    """
+    Clean the *bearish* field.
+
+    Strip if str, else ``"no"``; empty after strip becomes ``"no"``.
+    """
+    if isinstance(raw, str):
+        bearish = raw.strip()
+        return bearish or "no"
+    return "no"
+
+
+def _clean_alert_symbol(raw: object) -> str:
+    """
+    Clean the *symbol* field.
+
+    Strip if str, else ``"UNKNOWN"``; empty after strip becomes ``"UNKNOWN"``.
+    """
+    if isinstance(raw, str):
+        symbol = raw.strip()
+        return symbol or "UNKNOWN"
+    return "UNKNOWN"
+
+
+def _clean_alert_lastfired(raw: object) -> str:
+    """Clean the *lastfired* field: strip if str, else ``""``."""
+    return raw.strip() if isinstance(raw, str) else ""
+
+
+def _parse_alert(
+    raw: dict[str, Any],
+    anchor: datetime.datetime,
+) -> dict[str, Any] | None:
+    """
+    Parse a single raw alert dict.
+
+    Cleans fields, skips the *no alerts* placeholder, parses the timestamp,
+    and returns the alert dict (with ``_fired_at``) if newer than *anchor*.
+    Returns ``None`` when the alert should be skipped.
+    """
+    try:
+        alert_text = _clean_alert_text(raw.get("alert"))
+        bearish = _clean_alert_bearish(raw.get("bearish"))
+        lastfired = _clean_alert_lastfired(raw.get("lastfired"))
+        symbol = _clean_alert_symbol(raw.get("symbol"))
+
+        # Skip the "no alerts today" placeholder.
+        if alert_text == NO_ALERTS_PLACEHOLDER:
+            return None
+
+        # Parse the timestamp.
         try:
-            # Apply defaults and trim fields.
-            alert_text = raw_alert.get("alert", "")
-            alert_text = alert_text.strip() if isinstance(alert_text, str) else ""
+            fired_at = parse_stockcharts_time(lastfired)
+        except ValueError as e:
+            logger.warning("Failed to parse timestamp for symbol %s: %s", symbol, e)
+            return None
 
-            bearish = raw_alert.get("bearish", "no")
-            bearish = bearish.strip() if isinstance(bearish, str) else "no"
-            if not bearish:
-                bearish = "no"
+        # Only keep alerts newer than the anchor.
+        if fired_at > anchor:
+            return {
+                "alert": alert_text,
+                "bearish": bearish,
+                "lastfired": lastfired,
+                "symbol": symbol,
+                "_fired_at": fired_at,
+            }
+    except Exception as e:
+        logger.warning("Skipping malformed StockCharts alert: %s", e)
+        return None
+    return None
 
-            lastfired = raw_alert.get("lastfired", "")
-            lastfired = lastfired.strip() if isinstance(lastfired, str) else ""
 
-            symbol = raw_alert.get("symbol", "UNKNOWN")
-            symbol = symbol.strip() if isinstance(symbol, str) else "UNKNOWN"
-            if not symbol:
-                symbol = "UNKNOWN"
+def _is_strictly_newer(
+    candidate: dict[str, Any],
+    others: list[dict[str, Any]],
+) -> bool:
+    """Return True when no alert in *others* has the same symbol and a newer timestamp."""
+    for other in others:
+        if other["symbol"] == candidate["symbol"] and other["_fired_at"] > candidate["_fired_at"]:
+            return False
+    return True
 
-            # Skip the "no alerts today" placeholder.
-            if alert_text == NO_ALERTS_PLACEHOLDER:
-                continue
 
-            # Parse the timestamp.
-            try:
-                fired_at = parse_stockcharts_time(lastfired)
-            except ValueError as e:
-                logger.warning("Failed to parse timestamp for symbol %s: %s", symbol, e)
-                continue
+def _dedup_latest_per_symbol(
+    alerts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    O(n²) dedup keeping only the latest-fired alert per symbol.
 
-            # Only keep alerts newer than the anchor.
-            if fired_at > anchor:
-                parsed_alerts.append(
-                    {
-                        "alert": alert_text,
-                        "bearish": bearish,
-                        "lastfired": lastfired,
-                        "symbol": symbol,
-                        "_fired_at": fired_at,  # Internal field for dedup
-                    },
-                )
-        except Exception as e:
-            logger.warning("Skipping malformed StockCharts alert: %s", e)
-            continue
+    When two alerts share a symbol the first one in the list is kept
+    (tiebreaker: first match wins).
+    """
+    return [c for c in alerts if _is_strictly_newer(c, alerts)]
+
+
+def _strip_internal_fields(
+    alerts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove the internal ``_fired_at`` key from every alert dict."""
+    return [{k: v for k, v in a.items() if k != "_fired_at"} for a in alerts]
+
+
+@task(retries=2, retry_delay=datetime.timedelta(seconds=30))
+def detect_changes() -> list[dict[str, Any]]:
+    """
+    Fetch StockCharts alerts and filter for new ones since the last run.
+
+    Returns a list of new alert dicts with keys: alert, bearish, lastfired, symbol.
+    """
+    # Capture the current time at the start of this task run (for anchor update).
+    now = datetime.datetime.now(STOCKCHARTS_TZ)
+
+    anchor = _load_anchor(now)
+    raw_alerts = _fetch_alerts()
+
+    # Parse and filter alerts.
+    parsed = []
+    for raw_alert in raw_alerts:
+        alert = _parse_alert(raw_alert, anchor)
+        if alert is not None:
+            parsed.append(alert)
 
     # Dedup: keep only the latest-fired alert(s) per symbol.
-    deduped = []
-    for candidate in parsed_alerts:
-        is_latest = True
-        for other in parsed_alerts:
-            if (
-                other["symbol"] == candidate["symbol"]
-                and other["_fired_at"] > candidate["_fired_at"]
-            ):
-                is_latest = False
-                break
-        if is_latest:
-            deduped.append(candidate)
-
-    # Remove the internal _fired_at field before returning.
-    result = [{k: v for k, v in alert.items() if k != "_fired_at"} for alert in deduped]
+    deduped = _dedup_latest_per_symbol(parsed)
+    result = _strip_internal_fields(deduped)
 
     # Update the anchor to the current time (even if no new alerts were found).
     Variable.set(VARIABLE_NAME, now.isoformat())
