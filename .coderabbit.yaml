@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Inherit shared defaults from github.com/major/coderabbit and add
+# repo-specific review instructions for the Airflow DAG bundle.
+inheritance: true
+
+reviews:
+  path_instructions:
+    - path: "dags/**/*.py"
+      instructions: |
+        Airflow DAG review:
+        - This repo is loaded by Airflow's GitDagBundle; every merged
+          change ships to the production Airflow instance on the next
+          DAG-bundle refresh. Treat runtime behavior and security as
+          first-class.
+        - Secrets must come from an Airflow Connection via BaseHook;
+          never hardcode credentials, webhook URLs, or tokens, and do
+          not read them from environment variables outside the
+          connection system.
+        - Use the Airflow 3 TaskFlow API (`@task`, `from airflow.sdk
+          import DAG, BaseHook, Param, get_current_context`). Flag any
+          use of the legacy `airflow.operators.*` or
+          `airflow.models.*` imports.
+        - `start_date` must be a fixed `datetime.datetime(...)` value
+          (not `datetime.now()` or `pendulum.today()`) so runs are
+          reproducible across scheduler restarts.
+        - `schedule=None` and `catchup=False` are the norms for these
+          manually-triggered DAGs; flag backfills or schedule changes
+          unless they are clearly intentional.
+        - All HTTP and external I/O must pass an explicit `timeout=`.
+        - Renaming a `dag_id` or a `Param` key is a breaking change for
+          existing triggers; call it out in the review.
+        - Pre-commit (ruff + pyright) is the gating style/type check;
+          do not duplicate formatter-enforced style nits.
