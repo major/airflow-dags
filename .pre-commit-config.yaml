@@ -36,3 +36,15 @@ repos:
     rev: v1.1.411
     hooks:
       - id: pyright
+
+  # Cyclomatic complexity gate: every function/block must rate A or B.
+  # Requires `radon` on PATH (`pip install radon`).
+  # `-nc` reports only C/D/E/F; non-zero exit fails the commit.
+  - repo: local
+    hooks:
+      - id: radon-complexity
+        name: radon complexity (A or B)
+        entry: radon cc -s -nc --no-assert
+        language: system
+        files: ^dags/.*\.py$
+        pass_filenames: true
